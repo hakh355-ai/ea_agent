@@ -741,7 +741,7 @@ string SendRequest(string endpoint, string jsonBody)
    StringToCharArray(jsonBody, data, 0, StringLen(jsonBody));
 
    int code = WebRequest("POST", BridgeURL + endpoint, headers,
-                         5000, data, result, responseHeaders);
+                         15000, data, result, responseHeaders);
 
    if(code == -1)
    {

@@ -2,10 +2,10 @@
 
 ## Objective
 Run the AI_EA on a Vantage MT5 account, fully supervised by the Python bridge.
-All trades are decided by Kimi (trading agent) after news screening by GPT-4o.
+All trades are decided by Claude Sonnet 4.6 (trading agent) after news screening by GPT-4o.
 
 ## Pre-Start Checklist
-- [ ] API keys in `.env`: `OPENAI_API_KEY`, `MOONSHOT_API_KEY`, `NEWSAPI_KEY`
+- [ ] API keys in `.env`: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `NEWSAPI_KEY`
 - [ ] Python dependencies installed: `pip install -r requirements.txt`
 - [ ] MT5 installed and connected to Vantage
 - [ ] MT5 → Tools → Options → Expert Advisors → WebRequest URLs → add `http://127.0.0.1:5000`
@@ -38,7 +38,7 @@ Verify: open `http://127.0.0.1:5000/health` in browser → should return `{"stat
 | Problem | Response |
 |---------|----------|
 | Bridge unreachable (error 4014) | Add URL to MT5 allowed list; EA logs error, no trades placed |
-| Kimi API timeout | `trading_agent.py` catches exception → returns `hold` |
+| Claude API timeout | `trading_agent.py` catches exception → returns `hold` |
 | News fetch fails | `news_agent.py` returns neutral sentiment (0.0), trading continues with caution |
 | All signals blocked | Normal when: drawdown limit hit, 3 positions open, or news blackout active |
 | Wide spread | EA's `MaxSpreadPoints` guard skips the trade |

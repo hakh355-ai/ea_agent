@@ -1,5 +1,5 @@
 """
-Trading Agent (Moonshot AI Kimi).
+Trading Agent (Claude Sonnet 4.6).
 Receives OHLC bars, indicators, news sentiment, and regime params.
 Returns a buy/sell/hold decision with confidence, SL pips, TP pips.
 """
@@ -7,10 +7,13 @@ import json
 import os
 import sys
 
+import anthropic
 from dotenv import load_dotenv
-from openai import AsyncOpenAI
 
 load_dotenv()
+
+# Module-level singleton — reuses the underlying httpx connection pool
+_client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 
 def _ohlc_table(bars: list[dict], limit: int = 20) -> str:
@@ -238,31 +241,26 @@ async def get_signal(symbol: str, ohlc: dict, indicators: dict, news: dict,
                                 htf_draws=htf_draws, key_level_info=key_level_info)
 
     try:
-        client = AsyncOpenAI(
-            api_key=os.getenv("OPENAI_API_KEY"),
-        )
-        response = await client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user",   "content": user_prompt},
-            ],
+        response = await _client.messages.create(
+            model="claude-sonnet-4-6",
             max_tokens=256,
             temperature=0.2,
+            system=[{"type": "text", "text": system_prompt,
+                      "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": user_prompt}],
         )
-        raw = response.choices[0].message.content.strip()
+        raw = response.content[0].text.strip()
 
         # Strip markdown code fences if present
         if "```" in raw:
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        raw = raw.strip()
+            import re
+            m = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
+            raw = m.group(1).strip() if m else re.sub(r"^json\s*", "", raw.split("```")[1].strip())
 
         result = json.loads(raw)
 
     except Exception as e:
-        print(f"[trading_agent] GPT-4o error: {e}", file=sys.stderr)
+        print(f"[trading_agent] Claude error: {e}", file=sys.stderr)
         return {"action": "hold", "confidence": 0.0, "sl_pips": 30,
                 "tp_pips": 60, "reasoning": f"Agent error: {e}"}
 

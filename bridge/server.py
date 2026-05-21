@@ -143,6 +143,31 @@ async def health():
     }
 
 
+@app.get("/positions")
+async def positions():
+    import bridge.state as state
+    s = state.get_state()
+    params = state.get_strategy_params()
+    pip_sizes = params.get("pip_sizes", {})
+    result = {}
+    for sym, pos in s.open_positions.items():
+        tick = s.last_ticks.get(sym, {})
+        bid = tick.get("bid", 0.0)
+        ask = tick.get("ask", 0.0)
+        fill = pos.get("fill_price", 0.0)
+        action = pos.get("action", "")
+        pip_size = float(pip_sizes.get(sym, 0.0001))
+        if bid and fill:
+            price_diff = (bid - fill) if action == "buy" else (fill - ask)
+            pips = round(price_diff / pip_size, 1)
+        else:
+            price_diff = None
+            pips = None
+        result[sym] = {**pos, "current_bid": bid or None, "current_ask": ask or None,
+                       "unrealized_pips": pips}
+    return {"positions": result}
+
+
 @app.post("/signal", response_model=SignalResponse)
 async def signal(req: MarketDataRequest):
     import bridge.state as state
@@ -160,6 +185,7 @@ async def signal(req: MarketDataRequest):
                               blocked_reason="EA paused via /pause command")
 
     state.reset_daily_if_needed()
+    state.update_tick(req.symbol, req.current_tick.bid, req.current_tick.ask)
     params = state.get_strategy_params()
     s = state.get_state()
     s.last_known_balance = float(req.account.balance)

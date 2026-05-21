@@ -32,6 +32,7 @@ class AppState:
     smt_data: dict = field(default_factory=dict)  # {symbol: {structure, bos, last_hh, last_ll, timestamp}}
     pending_signals: dict = field(default_factory=dict)  # {request_id: signal data for Telegram fill notify}
     last_known_balance: float = 10000.0  # updated on every /signal request
+    last_ticks: dict = field(default_factory=dict)  # {symbol: {bid, ask}} updated on every /signal
 
 
 _state = AppState()
@@ -40,6 +41,10 @@ _position_lock = asyncio.Lock()   # prevents race condition on simultaneous sign
 
 def get_state() -> AppState:
     return _state
+
+
+def update_tick(symbol: str, bid: float, ask: float):
+    _state.last_ticks[symbol] = {"bid": bid, "ask": ask}
 
 
 def reset_daily_if_needed():

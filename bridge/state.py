@@ -47,6 +47,24 @@ def update_tick(symbol: str, bid: float, ask: float):
     _state.last_ticks[symbol] = {"bid": bid, "ask": ask}
 
 
+def update_position_sl_tp(symbol: str, sl: float, tp: float):
+    if symbol in _state.open_positions:
+        _state.open_positions[symbol]["sl"] = sl
+        _state.open_positions[symbol]["tp"] = tp
+        _persist_positions()
+
+
+def recover_position(symbol: str, ticket: int, action: str, lots: float,
+                     fill_price: float, sl: float, tp: float, open_time: float):
+    """Re-add a position the bridge lost (e.g. after a bad sync). No-op if already tracked."""
+    if symbol not in _state.open_positions:
+        _state.open_positions[symbol] = {
+            "ticket": ticket, "action": action, "lots": lots,
+            "fill_price": fill_price, "sl": sl, "tp": tp, "open_time": open_time,
+        }
+        _persist_positions()
+
+
 def reset_daily_if_needed():
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     if _state.daily_reset_date != today:
@@ -124,8 +142,15 @@ def record_fill(ticket: int, symbol: str, action: str, fill_price: float, lots: 
 
 
 def sync_positions(broker_positions: dict):
-    """Overwrite state with real broker positions (called on EA startup via /sync_positions)."""
-    _state.open_positions = broker_positions
+    """Overwrite state with real broker positions (called on EA startup via /sync_positions).
+    Preserves sl/tp/confidence/regime from existing bridge state so those fields
+    survive EA restarts and periodic 10-min syncs."""
+    _PRESERVE = ("sl", "tp", "confidence", "regime")
+    merged = {}
+    for sym, pos in broker_positions.items():
+        existing = _state.open_positions.get(sym, {})
+        merged[sym] = {**pos, **{k: existing[k] for k in _PRESERVE if k in existing}}
+    _state.open_positions = merged
     _persist_positions()
 
 

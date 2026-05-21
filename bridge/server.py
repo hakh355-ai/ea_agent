@@ -186,6 +186,13 @@ async def signal(req: MarketDataRequest):
 
     state.reset_daily_if_needed()
     state.update_tick(req.symbol, req.current_tick.bid, req.current_tick.ask)
+    if req.open_position:
+        state.recover_position(
+            req.symbol, req.open_position.ticket, req.open_position.type,
+            req.open_position.lots, req.open_position.open_price,
+            req.open_position.sl, req.open_position.tp, time.time(),
+        )
+        state.update_position_sl_tp(req.symbol, req.open_position.sl, req.open_position.tp)
     params = state.get_strategy_params()
     s = state.get_state()
     s.last_known_balance = float(req.account.balance)

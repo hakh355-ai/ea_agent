@@ -243,7 +243,7 @@ async def get_signal(symbol: str, ohlc: dict, indicators: dict, news: dict,
     try:
         response = await _client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=256,
+            max_tokens=512,
             temperature=0.2,
             system=[{"type": "text", "text": system_prompt,
                       "cache_control": {"type": "ephemeral"}}],

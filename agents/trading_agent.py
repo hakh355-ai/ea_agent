@@ -110,7 +110,8 @@ def _build_prompt(symbol: str, ohlc: dict, indicators: dict, news: dict,
     fib_dir      = indicators.get("fib_direction", "unknown")
     nearest_fib  = indicators.get("nearest_fib", 0.0)
 
-    current_price = float(ohlc.get("M5", [{}])[-1].get("c", 0)) if ohlc.get("M5") else 0
+    m5_last = ohlc.get("M5", [{}])[-1] if ohlc.get("M5") else {}
+    current_price = float(m5_last.get("c", m5_last.get("close", 0)))
 
     return f"""=== ICT DAILY BIAS METHODOLOGY: {symbol} ===
 Current Price : {current_price}
@@ -220,6 +221,12 @@ async def get_signal(symbol: str, ohlc: dict, indicators: dict, news: dict,
                      smc: dict = None, smt_signal: str = "none",
                      m1_bars: list = None,
                      htf_draws: dict = None, key_level_info: dict = None) -> dict:
+    # Validate price data before calling LLM
+    m5 = ohlc.get("M5", [])
+    if not m5 or float(m5[-1].get("c", m5[-1].get("close", 0))) == 0:
+        return {"action": "hold", "confidence": 0.0, "sl_pips": 30,
+                "tp_pips": 60, "reasoning": "No valid M5 price data"}
+
     learned_rules = strategy_params.get("learned_rules", [])
     system_prompt = strategy_params.get(
         "trading_prompt",

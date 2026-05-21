@@ -31,6 +31,7 @@ class AppState:
     symbol_losses_today: dict = field(default_factory=dict)  # {symbol: loss_count} resets daily
     smt_data: dict = field(default_factory=dict)  # {symbol: {structure, bos, last_hh, last_ll, timestamp}}
     pending_signals: dict = field(default_factory=dict)  # {request_id: signal data for Telegram fill notify}
+    last_known_balance: float = 10000.0  # updated on every /signal request
 
 
 _state = AppState()

@@ -162,6 +162,7 @@ async def signal(req: MarketDataRequest):
     state.reset_daily_if_needed()
     params = state.get_strategy_params()
     s = state.get_state()
+    s.last_known_balance = float(req.account.balance)
 
     # ── 0. Per-symbol loss limit (max 2 losses per symbol per day) ──────────
     state.reset_daily_if_needed()
@@ -208,11 +209,26 @@ async def signal(req: MarketDataRequest):
                               reason="Insufficient bars for indicators")
 
     # SMC multi-timeframe analysis
+    # compute_daily() returns a different schema (no last_hh/ll/market_structure)
+    # → only use compute() for H4/H1/M15, fall back to {} if not enough bars.
+    # M15 exception: when 15 <= bars < 50, use compute_daily() for liquidity_sweep
+    # only — it is schema-compatible and keeps the sweep-direction safeguard active
+    # during MT5 startup while M15 history is still syncing.
+    def _m15_smc(bars):
+        if len(bars) >= 50:
+            return compute(bars)
+        if len(bars) >= 15:
+            daily_result = compute_daily(bars) or {}
+            sweep = daily_result.get("liquidity_sweep", "none")
+            logger.warning(f"M15 only {len(bars)} bars — sweep-only fallback (sweep={sweep})")
+            return {"liquidity_sweep": sweep}
+        return {}
+
     smc = {
         "daily": compute_daily(daily_bars) if len(daily_bars) >= 3 else {},
-        "h4":    compute(h4_bars)  if len(h4_bars)  >= 20 else compute_daily(h4_bars)  if len(h4_bars)  >= 3 else {},
-        "h1":    compute(h1_bars)  if len(h1_bars)  >= 50 else compute_daily(h1_bars)  if len(h1_bars)  >= 3 else {},
-        "m15":   compute(m15_bars) if len(m15_bars) >= 50 else compute_daily(m15_bars) if len(m15_bars) >= 3 else {},
+        "h4":    compute(h4_bars)  if len(h4_bars)  >= 20 else {},
+        "h1":    compute(h1_bars)  if len(h1_bars)  >= 50 else {},
+        "m15":   _m15_smc(m15_bars),
     }
 
     # Fallback: wenn pivot-Erkennung scheitert (starker Trend, wenig Swings),
@@ -285,7 +301,11 @@ async def signal(req: MarketDataRequest):
         "ny_low":      htf_draws["ny_low"],
     }
 
-    pip_size = float(params.get("pip_sizes", {}).get(req.symbol, 0.0001))
+    pip_size = float(params.get("pip_sizes", {}).get(req.symbol, 0.0))
+    if pip_size == 0.0:
+        logger.error(f"{req.symbol}: pip_size not configured in strategy_params.json — trade blocked")
+        return SignalResponse(request_id=req.request_id, action="blocked",
+                              blocked_reason=f"pip_size not configured for {req.symbol}")
     _prox_by_sym = params.get("key_level_proximity_pips_by_symbol", {})
     proximity_pips = float(_prox_by_sym.get(req.symbol, params.get("key_level_proximity_pips", 5.0)))
     current_mid = (req.current_tick.bid + req.current_tick.ask) / 2
@@ -625,6 +645,11 @@ async def confirm(req: ConfirmRequest):
 
     sl = req.sl if req.sl else sig.get("sl_price", 0.0)
     tp = req.tp if req.tp else sig.get("tp_price", 0.0)
+    if sl == 0.0:
+        logger.error(f"CRITICAL: {req.symbol} ticket={req.ticket} SL=0 at /confirm — closing position immediately!")
+        # Attempt emergency close via bridge state — EA will close on next tick
+        state.record_close_pnl(0.0, symbol=req.symbol)
+        return {"status": "error", "reason": "sl=0 rejected"}
     state.record_fill(
         req.ticket, req.symbol, req.action, req.fill_price, req.lots,
         sl=sl, tp=tp,
@@ -657,7 +682,7 @@ async def close_trade(req: CloseRequest):
     await notify_close(req.symbol, req.pnl, req.outcome, req.close_price)
     # Drawdown warning at 3%
     s = state.get_state()
-    balance = 10000.0  # approximate; real balance comes from next MT5 tick
+    balance = s.last_known_balance
     if balance > 0 and abs(s.daily_realized_pnl) / balance >= 0.03:
         await notify_drawdown_warning(abs(s.daily_realized_pnl) / balance, balance)
     return {"status": "ok"}

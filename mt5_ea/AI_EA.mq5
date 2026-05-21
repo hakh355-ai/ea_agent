@@ -35,6 +35,7 @@ datetime       LastCandle[];    // last M1 candle time per symbol (candle-close 
 double         TP1Prices[];     // partial close level per symbol (50% of TP distance)
 bool           PartialClosed[]; // whether partial close already executed for current position
 bool           HadPosition[];   // tracks whether each symbol had an open position last tick
+double         InitSlDist[];    // initial SL distance at order placement (for correct trailing)
 int            RequestSeq = 0;
 datetime       LastSyncTime = 0;   // for periodic position sync
 
@@ -51,6 +52,8 @@ int OnInit()
    ArrayInitialize(PartialClosed, false);
    ArrayResize(HadPosition, SymbolCount);
    ArrayInitialize(HadPosition, false);
+   ArrayResize(InitSlDist, SymbolCount);
+   ArrayInitialize(InitSlDist, 0.0);
 
    // Add all symbols to Market Watch
    for(int i = 0; i < SymbolCount; i++)
@@ -133,6 +136,7 @@ void DetectManualCloses()
          // Reset partial close state
          TP1Prices[i]    = 0.0;
          PartialClosed[i] = false;
+         InitSlDist[i]   = 0.0;
 
          // Read actual PnL + close reason from deal history (last 5 minutes)
          double closePnl   = 0.0;
@@ -140,7 +144,7 @@ void DetectManualCloses()
          long   closeTkt   = 0;
          string outcome    = "manual";
 
-         if(HistorySelect(TimeCurrent() - 300, TimeCurrent() + 1))
+         if(HistorySelect(TimeCurrent() - 600, TimeCurrent() + 1))
          {
             for(int d = HistoryDealsTotal() - 1; d >= 0; d--)
             {
@@ -270,7 +274,7 @@ void CheckProfitTarget()
             Trade.PositionClose(sym);
 
          for(int m = 0; m < SymbolCount; m++)
-            if(Symbols[m] == sym) { TP1Prices[m] = 0.0; PartialClosed[m] = false; break; }
+            if(Symbols[m] == sym) { TP1Prices[m] = 0.0; PartialClosed[m] = false; InitSlDist[m] = 0.0; break; }
 
          string closePayload = StringFormat(
             "{\"ticket\":%I64d,\"symbol\":\"%s\",\"close_price\":%.6f,\"pnl\":%.2f,\"outcome\":\"tp_hit\"}",
@@ -326,7 +330,7 @@ void CheckGlobalProfit()
          Trade.PositionClose(sym);
 
       for(int m = 0; m < SymbolCount; m++)
-         if(Symbols[m] == sym) { TP1Prices[m] = 0.0; PartialClosed[m] = false; break; }
+         if(Symbols[m] == sym) { TP1Prices[m] = 0.0; PartialClosed[m] = false; InitSlDist[m] = 0.0; break; }
 
       string closePayload = StringFormat(
          "{\"ticket\":%I64d,\"symbol\":\"%s\",\"close_price\":%.6f,\"pnl\":%.2f,\"outcome\":\"global_tp\"}",
@@ -359,8 +363,13 @@ void TrailPositions()
       double point      = SymbolInfoDouble(sym, SYMBOL_POINT);
       double digits     = (double)SymbolInfoInteger(sym, SYMBOL_DIGITS);
 
-      // SL distance = distance from open to original SL
-      double slDist = MathAbs(currentTP - openPrice) / 2.0;
+      // SL distance = original SL distance stored at order placement
+      int symIdx = -1;
+      for(int k = 0; k < SymbolCount; k++)
+         if(Symbols[k] == sym) { symIdx = k; break; }
+      double slDist = (symIdx >= 0 && InitSlDist[symIdx] > 0)
+                      ? InitSlDist[symIdx]
+                      : MathAbs(currentSL - openPrice);
       if(slDist < point * 5) continue;  // Too small, skip
 
       double newSL = currentSL;
@@ -668,6 +677,9 @@ void ExecuteSignal(string symbol, string action, double lots,
          result = Trade.Buy(lots, symbol, 0, sl, tp, comment);
       else
          result = Trade.Sell(lots, symbol, 0, sl, tp, comment);
+      if(result)
+         for(int m = 0; m < SymbolCount; m++)
+            if(Symbols[m] == symbol) { InitSlDist[m] = slDist; break; }
    }
    else
    {
@@ -710,7 +722,7 @@ void ClosePosition(string symbol, string requestId)
       Trade.PositionClose(symbol);
 
    for(int k = 0; k < SymbolCount; k++)
-      if(Symbols[k] == symbol) { TP1Prices[k] = 0.0; PartialClosed[k] = false; break; }
+      if(Symbols[k] == symbol) { TP1Prices[k] = 0.0; PartialClosed[k] = false; InitSlDist[k] = 0.0; break; }
 
    string closePayload = StringFormat(
       "{\"ticket\":%I64d,\"symbol\":\"%s\",\"close_price\":%.6f,\"pnl\":%.2f,\"outcome\":\"manual\"}",
@@ -805,10 +817,15 @@ void SyncPositionsWithBridge()
       string sym = PosInfo.Symbol();
 
       // Only our symbols
-      bool isOurs = false;
+      int symIdx = -1;
       for(int k = 0; k < SymbolCount; k++)
-         if(Symbols[k] == sym) { isOurs = true; break; }
-      if(!isOurs) continue;
+         if(Symbols[k] == sym) { symIdx = k; break; }
+      if(symIdx < 0) continue;
+
+      // Repopulate InitSlDist so trailing survives EA restarts
+      double sl = PosInfo.StopLoss();
+      if(sl > 0.0 && InitSlDist[symIdx] == 0.0)
+         InitSlDist[symIdx] = MathAbs(sl - PosInfo.PriceOpen());
 
       if(!first) posJson += ",";
       first = false;
